@@ -13,6 +13,9 @@ def get_m(data):
     return data.map(lambda x: (0, x[2])).reduce(lambda x, y: max(x, y))[1] + 1
 
 
+n = 0
+
+
 def main(
         num_factors, num_workers, num_iterations, beta_value, lambda_value,
         input_v_filepath, output_w_filepath, output_h_filepath):
@@ -28,22 +31,30 @@ def main(
     v = v.map(lambda line: split_data(line))
     v.cache()
 
+    total_v = v.count()
+
     # get m, n
-    n, m = get_n(v), get_m(v)
+    N, M = get_n(v), get_m(v)
+
+    # get Ni, Nj
+    Ni = v.map(lambda x: (x[1], 1)).reduceByKey(lambda x, y: x + y).map(lambda x: ('Ni', x[0], x[1]))
+    Nj = v.map(lambda x: (x[2], 1)).reduceByKey(lambda x, y: x + y).map(lambda x: ('Nj', x[0], x[1]))
 
     # generate w
     w = sc.parallelize(
-        [('w', i, np.array([randint(0, 10) for k in range(num_factors)]))
-            for i in range(n)]
+        [('w', i, np.array([float(randint(0, 10)) for k in range(num_factors)]))
+            for i in range(N)]
     )
 
     # generate h
     h = sc.parallelize(
-        [('h', j, np.array([randint(0, 10) for k in range(num_factors)]))
-            for j in range(m)]
+        [('h', j, np.array([float(randint(0, 10)) for k in range(num_factors)]))
+            for j in range(M)]
     )
 
-    all_data = w.union(h).union(v)
+    # n = sc.parallelize([('n', 0)])
+
+    all_data = w.union(h).union(v).union(Ni).union(Nj)
 
     # main mf loop
     for epoch in xrange(num_iterations):
@@ -51,9 +62,9 @@ def main(
         for d_i in xrange(d):
             def v_map(t):
                 i, j = t[1], t[2]
-                block_i = i / int(math.ceil(float(n) / float(d)))
+                block_i = i / int(math.ceil(float(N) / float(d)))
                 block_i = (block_i + d_i) % d
-                block_j = j / int(math.ceil(float(m) / float(d)))
+                block_j = j / int(math.ceil(float(M) / float(d)))
 
                 if block_i == block_j:
                     return block_i, t
@@ -62,14 +73,20 @@ def main(
 
             def w_map(t):
                 i = t[1]
-                block_i = i / int(math.ceil(float(n) / float(d)))
+                block_i = i / int(math.ceil(float(N) / float(d)))
                 block_i = (block_i + d_i) % d
                 return block_i, t
 
             def h_map(t):
                 j = t[1]
-                block_j = j / int(math.ceil(float(m) / float(d)))
+                block_j = j / int(math.ceil(float(M) / float(d)))
                 return block_j, t
+
+            def Ni_map(t):
+                return w_map(t)
+
+            def Nj_map(t):
+                return h_map(t)
 
             def stratum_map(t):
                 if t[0] == 'w':
@@ -78,13 +95,17 @@ def main(
                     return h_map(t)
                 elif t[0] == 'v':
                     return v_map(t)
+                elif t[0] == 'Ni':
+                    return Ni_map(t)
+                elif t[0] == 'Nj':
+                    return Nj_map(t)
 
             def sgd_partitions(iterator):
                 w = {}
                 h = {}
+                Ni = {}
+                Nj = {}
                 tmp_v = []
-
-                epsilon = math.pow((100 + epoch), -beta_value)
 
                 for it in iterator:
                     t = it[1]
@@ -95,29 +116,56 @@ def main(
                         j = t[1]
                         h[j] = t[2]
                     elif t[0] == 'v':
-                            tmp_v.append(t)
+                        tmp_v.append(t)
+                    elif t[0] == 'Ni':
+                        Ni[t[1]] = t[2]
+                    elif t[0] == 'Nj':
+                        Nj[t[1]] = t[2]
+
+                n = epoch * total_v
 
                 if len(w) > 0 and len(h) > 0:
                     for t in tmp_v:
                         i, j, r = t[1], t[2], t[3]
                         wi = w[i]
                         hj = h[j]
-                        esti = np.inner(wi, hj) - float(r)
+                        print "before::"
+                        print "i, j, r", i, j, r
+                        print "wi:", wi
+                        print "hj", hj
+                        print "n", n
+                        print "Ni", Ni[i], "Nj", Nj[j]
 
-                        delta_w = -2.0 * esti * hj + 2.0 * (lambda_value) * wi
+                        n += 1
+                        epsilon = math.pow((100 + n), - beta_value)
+
+                        esti = float(r) - np.inner(wi, hj)
+
+                        delta_w = -2.0 * esti * hj + 2.0 * ((lambda_value) / Ni[i]) * wi
                         w[i] -= epsilon * delta_w
 
-                        delta_h = -2.0 * esti * wi + 2.0 * (lambda_value) * hj
+                        esti = float(r) - np.inner(wi, hj)
+
+                        delta_h = -2.0 * esti * wi + 2.0 * ((lambda_value) / Nj[j]) * hj
                         h[j] -= epsilon * delta_h
+
+                        print "after::"
+                        print "wi", wi
+                        print "hj", hj
+                        print "n", n
 
                 ret = []
                 for i, vector in w.items():
                     ret.append(('w', i, vector))
                 for j, vector in h.items():
                     ret.append(('h', j, vector))
+                for i, value in Ni.items():
+                    ret.append(('Ni', i, value))
+                for j, value in Nj.items():
+                    ret.append(('Nj', j, value))
                 for v in tmp_v:
                     ret.append(v)
-                print ret
+                # print ret
 
                 return ret
 
