@@ -1,7 +1,7 @@
 from sys import argv
 from pyspark import SparkContext
 import numpy as np
-from random import randint, random
+from random import random
 import math
 
 
@@ -13,8 +13,27 @@ def get_m(data):
     return data.map(lambda x: (0, x[2])).reduce(lambda x, y: max(x, y))[1] + 1
 
 
-n = 0
+IS_TEST = True
+test_output_path = "/tmp/sanchuah."
 
+
+def dump_WH(path, all_data, N, M, num_factors, epoch):
+    dump_W("%sW_%d.csv" % (path, epoch), all_data, N, num_factors)
+    dump_H("%sH_%d.csv" % (path, epoch), all_data, M, num_factors)
+
+
+def dump_W(filename, all_data, N, num_factors):
+    w_vectors = all_data.filter(lambda x: x[0] == 'w').collect()
+    w_vectors = [vector for _, i, vector in sorted(w_vectors, key=lambda x: x[1])]
+    w = np.concatenate(w_vectors).reshape(N, num_factors)
+    np.savetxt(filename, w, delimiter=",")
+
+
+def dump_H(filename, all_data, M, num_factors):
+    h_vectors = all_data.filter(lambda x: x[0] == 'h').collect()
+    h_vectors = [vector for _, j, vector in sorted(h_vectors, key=lambda x: x[1])]
+    h = np.concatenate(h_vectors).reshape(M, num_factors)
+    np.savetxt(filename, h.T, delimiter=",")
 
 def main(
         num_factors, num_workers, num_iterations, beta_value, lambda_value,
@@ -175,15 +194,12 @@ def main(
 
             all_data = all_data.map(stratum_map).partitionBy(d + 1).mapPartitions(sgd_partitions)
 
-    w_vectors = all_data.filter(lambda x: x[0] == 'w').collect()
-    w_vectors = [vector for _, i, vector in sorted(w_vectors, key=lambda x: x[1])]
-    w = np.concatenate(w_vectors).reshape(N, num_factors)
-    np.savetxt(output_w_filepath, w, delimiter=",")
+        if IS_TEST:
+            dump_WH(test_output_path, all_data, N, M, num_factors, epoch)
 
-    h_vectors = all_data.filter(lambda x: x[0] == 'h').collect()
-    h_vectors = [vector for _, j, vector in sorted(h_vectors, key=lambda x: x[1])]
-    h = np.concatenate(h_vectors).reshape(M, num_factors)
-    np.savetxt(output_h_filepath, h.T, delimiter=",")
+
+    dump_W(output_w_filepath, all_data, N, num_factors)
+    dump_H(output_h_filepath, all_data, M, num_factors)
 
 
 if __name__ == "__main__":
