@@ -1,7 +1,7 @@
 from sys import argv
 from pyspark import SparkContext
 import numpy as np
-from random import randint
+from random import randint, random
 import math
 
 
@@ -27,7 +27,7 @@ def main(
 
     def split_data(line):
         tmp = line.split(",")
-        return ('v', int(tmp[0]), int(tmp[1]), int(tmp[2]))
+        return ('v', int(tmp[0]) - 1, int(tmp[1]) - 1, int(tmp[2]))
     v = v.map(lambda line: split_data(line))
     v.cache()
 
@@ -42,17 +42,15 @@ def main(
 
     # generate w
     w = sc.parallelize(
-        [('w', i, np.array([float(randint(0, 10)) for k in range(num_factors)]))
+        [('w', i, np.array([random() for k in range(num_factors)]))
             for i in range(N)]
     )
 
     # generate h
     h = sc.parallelize(
-        [('h', j, np.array([float(randint(0, 10)) for k in range(num_factors)]))
+        [('h', j, np.array([random() for k in range(num_factors)]))
             for j in range(M)]
     )
-
-    # n = sc.parallelize([('n', 0)])
 
     all_data = w.union(h).union(v).union(Ni).union(Nj)
 
@@ -122,19 +120,20 @@ def main(
                     elif t[0] == 'Nj':
                         Nj[t[1]] = t[2]
 
-                n = epoch * total_v
+                n = epoch * total_v + (total_v * d_i) / d  # estimate 'n'
 
                 if len(w) > 0 and len(h) > 0:
                     for t in tmp_v:
                         i, j, r = t[1], t[2], t[3]
                         wi = w[i]
                         hj = h[j]
-                        print "before::"
-                        print "i, j, r", i, j, r
-                        print "wi:", wi
-                        print "hj", hj
-                        print "n", n
-                        print "Ni", Ni[i], "Nj", Nj[j]
+                        # print "before::"
+                        # print "i, j, r", i, j, r
+                        # print "wi:", wi
+                        # print "hj", hj
+                        # print "wi*hj = ", np.inner(wi, hj), "v - wi*hj =", (r-np.inner(wi, hj))
+                        # print "n", n
+                        # print "Ni", Ni[i], "Nj", Nj[j]
 
                         n += 1
                         epsilon = math.pow((100 + n), - beta_value)
@@ -144,15 +143,20 @@ def main(
                         delta_w = -2.0 * esti * hj + 2.0 * ((lambda_value) / Ni[i]) * wi
                         w[i] -= epsilon * delta_w
 
+                        # print "esti", esti, "lambda_value", lambda_value, 'delta_w', delta_w
+
                         esti = float(r) - np.inner(wi, hj)
 
                         delta_h = -2.0 * esti * wi + 2.0 * ((lambda_value) / Nj[j]) * hj
                         h[j] -= epsilon * delta_h
 
-                        print "after::"
-                        print "wi", wi
-                        print "hj", hj
-                        print "n", n
+                        # print "esti", esti, "lambda_value", lambda_value, 'delta_w', delta_w
+
+                        # print "after::"
+                        # print "wi", wi
+                        # print "hj", hj
+                        # print "wi*hj = ", np.inner(wi, hj), "v - wi*hj =", (r-np.inner(wi, hj))
+                        # print "n", n
 
                 ret = []
                 for i, vector in w.items():
@@ -173,13 +177,13 @@ def main(
 
     w_vectors = all_data.filter(lambda x: x[0] == 'w').collect()
     w_vectors = [vector for _, i, vector in sorted(w_vectors, key=lambda x: x[1])]
-    w = np.concatenate(w_vectors)
-    np.savetxt(output_w_filepath, w)
+    w = np.concatenate(w_vectors).reshape(N, num_factors)
+    np.savetxt(output_w_filepath, w, delimiter=",")
 
     h_vectors = all_data.filter(lambda x: x[0] == 'h').collect()
     h_vectors = [vector for _, j, vector in sorted(h_vectors, key=lambda x: x[1])]
-    h = np.concatenate(h_vectors)
-    np.savetxt(output_h_filepath, h.T)
+    h = np.concatenate(h_vectors).reshape(M, num_factors)
+    np.savetxt(output_h_filepath, h.T, delimiter=",")
 
 
 if __name__ == "__main__":
