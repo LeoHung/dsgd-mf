@@ -19,4 +19,5 @@ def main(path, v_file):
         epoch += 1 
     
 if __name__ == "__main__":
-    main('/tmp/sanchuah.','data/test_v.txt')
+    from sys import argv
+    main('/tmp/sanchuah.',argv[1])
