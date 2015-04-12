@@ -1,7 +1,7 @@
 from sys import argv
 from pyspark import SparkContext
 import numpy as np
-from random import random
+from random import random, gauss
 import math
 
 
@@ -62,13 +62,13 @@ def main(
 
     # generate w
     w = sc.parallelize(
-        [('w', i, np.array([random() for _ in range(num_factors)]))
+        [('w', i, np.array([0.01 * gauss(0, 1) for _ in range(num_factors)]))
             for i in range(N)]
     )
 
     # generate h
     h = sc.parallelize(
-        [('h', j, np.array([random() for _ in range(num_factors)]))
+        [('h', j, np.array([0.01 * gauss(0, 1) for _ in range(num_factors)]))
             for j in range(M)]
     )
 
@@ -76,7 +76,6 @@ def main(
 
     # main mf loop
     for epoch in xrange(num_iterations):
-        global LNZSL
 
         # generate stratum
         for d_i in xrange(d):
@@ -156,8 +155,22 @@ def main(
                         delta_w = -2.0 * esti * h[j] + 2.0 * ((lambda_value) / Ni[i]) * w[i]
                         delta_h = -2.0 * esti * w[i] + 2.0 * ((lambda_value) / Nj[j]) * h[j]
 
+                        print "i, j, r", i, j, r
+                        print "before: "
+                        print "w[i]", w[i]
+                        print "h[j]", h[j]
+                        print "esti", esti
+                        print "delta_w", delta_w
+                        print "delta_h", delta_h
+                        print "epsilon", epsilon
+
                         w[i] = w[i] - epsilon * delta_w
                         h[j] = h[j] - epsilon * delta_h
+
+                        print "after: "
+                        print "w[i]", w[i]
+                        print "h[j]", h[j]
+
 
                 ret = []
                 for i, vector in w.items():
