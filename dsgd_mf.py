@@ -35,6 +35,7 @@ def dump_H(filename, all_data, M, num_factors):
     h = np.concatenate(h_vectors).reshape(M, num_factors)
     np.savetxt(filename, h.T, delimiter=",")
 
+
 def main(
         num_factors, num_workers, num_iterations, beta_value, lambda_value,
         input_v_filepath, output_w_filepath, output_h_filepath):
@@ -61,13 +62,13 @@ def main(
 
     # generate w
     w = sc.parallelize(
-        [('w', i, np.array([random() for k in range(num_factors)]))
+        [('w', i, np.array([random() for _ in range(num_factors)]))
             for i in range(N)]
     )
 
     # generate h
     h = sc.parallelize(
-        [('h', j, np.array([random() for k in range(num_factors)]))
+        [('h', j, np.array([random() for _ in range(num_factors)]))
             for j in range(M)]
     )
 
@@ -75,6 +76,8 @@ def main(
 
     # main mf loop
     for epoch in xrange(num_iterations):
+        global LNZSL
+
         # generate stratum
         for d_i in xrange(d):
             def v_map(t):
@@ -144,38 +147,17 @@ def main(
                 if len(w) > 0 and len(h) > 0:
                     for t in tmp_v:
                         i, j, r = t[1], t[2], t[3]
-                        wi = w[i]
-                        hj = h[j]
-                        # print "before::"
-                        # print "i, j, r", i, j, r
-                        # print "wi:", wi
-                        # print "hj", hj
-                        # print "wi*hj = ", np.inner(wi, hj), "v - wi*hj =", (r-np.inner(wi, hj))
-                        # print "n", n
-                        # print "Ni", Ni[i], "Nj", Nj[j]
 
-                        n += 1
                         epsilon = math.pow((100 + n), - beta_value)
+                        n += 1
 
-                        esti = float(r) - np.inner(wi, hj)
+                        esti = float(r) - np.inner(w[i], h[j])
 
-                        delta_w = -2.0 * esti * hj + 2.0 * ((lambda_value) / Ni[i]) * wi
-                        w[i] -= epsilon * delta_w
+                        delta_w = -2.0 * esti * h[j] + 2.0 * ((lambda_value) / Ni[i]) * w[i]
+                        delta_h = -2.0 * esti * w[i] + 2.0 * ((lambda_value) / Nj[j]) * h[j]
 
-                        # print "esti", esti, "lambda_value", lambda_value, 'delta_w', delta_w
-
-                        esti = float(r) - np.inner(wi, hj)
-
-                        delta_h = -2.0 * esti * wi + 2.0 * ((lambda_value) / Nj[j]) * hj
-                        h[j] -= epsilon * delta_h
-
-                        # print "esti", esti, "lambda_value", lambda_value, 'delta_w', delta_w
-
-                        # print "after::"
-                        # print "wi", wi
-                        # print "hj", hj
-                        # print "wi*hj = ", np.inner(wi, hj), "v - wi*hj =", (r-np.inner(wi, hj))
-                        # print "n", n
+                        w[i] = w[i] - epsilon * delta_w
+                        h[j] = h[j] - epsilon * delta_h
 
                 ret = []
                 for i, vector in w.items():
@@ -188,7 +170,6 @@ def main(
                     ret.append(('Nj', j, value))
                 for v in tmp_v:
                     ret.append(v)
-                # print ret
 
                 return ret
 
