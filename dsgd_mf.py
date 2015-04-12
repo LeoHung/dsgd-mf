@@ -1,7 +1,7 @@
 from sys import argv
 from pyspark import SparkContext
 import numpy as np
-from random import random
+from random import random, gauss
 import math
 
 
@@ -14,7 +14,7 @@ def get_m(data):
 
 
 IS_TEST = True
-test_output_path = "/tmp/sanchuah."
+test_output_path = "/tmp/netflix/"
 
 
 def dump_WH(path, all_data, N, M, num_factors, epoch):
@@ -60,17 +60,23 @@ def main(
     Ni = v.map(lambda x: (x[1], 1)).reduceByKey(lambda x, y: x + y).map(lambda x: ('Ni', x[0], x[1]))
     Nj = v.map(lambda x: (x[2], 1)).reduceByKey(lambda x, y: x + y).map(lambda x: ('Nj', x[0], x[1]))
 
+    # all i 
+    all_i = v.map(lambda x: x[1]).distinct()
+    all_j = v.map(lambda x: x[2]).distinct()
+
     # generate w
-    w = sc.parallelize(
-        [('w', i, np.array([random() for _ in range(num_factors)]))
-            for i in range(N)]
-    )
+    #w = sc.parallelize(
+    #    [('w', i, np.array([random() for _ in range(num_factors)]))
+    #        for i in range(N)]
+    #)
+    w = all_i.map(lambda i: ('w', i, np.array([0.01 * gauss(0, 1) for _ in range(num_factors)]))) 
 
     # generate h
-    h = sc.parallelize(
-        [('h', j, np.array([random() for _ in range(num_factors)]))
-            for j in range(M)]
-    )
+    #h = sc.parallelize(
+    #    [('h', j, np.array([random() for _ in range(num_factors)]))
+    #        for j in range(M)]
+    #)
+    h = all_j.map(lambda j: ('h', j, np.array([0.01 * gauss(0, 1) for _ in range(num_factors)])))
 
     all_data = w.union(h).union(v).union(Ni).union(Nj)
 
