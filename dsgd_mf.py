@@ -24,15 +24,22 @@ def dump_WH(path, all_data, N, M, num_factors, epoch):
 
 def dump_W(filename, all_data, N, num_factors):
     w_vectors = all_data.filter(lambda x: x[0] == 'w').collect()
-    w_vectors = [vector for _, i, vector in sorted(w_vectors, key=lambda x: x[1])]
-    w = np.concatenate(w_vectors).reshape(N, num_factors)
+    w_vectors = [(i ,vector) for _, i, vector in sorted(w_vectors, key=lambda x: x[1])]
+    
+    w = np.zeros(N, num_factors)
+    for i, w_vector in w_vectors:
+        w[i] = w_vector 
+    
     np.savetxt(filename, w, delimiter=",")
 
 
 def dump_H(filename, all_data, M, num_factors):
     h_vectors = all_data.filter(lambda x: x[0] == 'h').collect()
-    h_vectors = [vector for _, j, vector in sorted(h_vectors, key=lambda x: x[1])]
-    h = np.concatenate(h_vectors).reshape(M, num_factors)
+    h_vectors = [(j, vector) for _, j, vector in sorted(h_vectors, key=lambda x: x[1])]
+    
+    h = np.zeros(M, num_factors)
+    for j, h_vector in h_vectors:
+        h[j] = h_vector 
     np.savetxt(filename, h.T, delimiter=",")
 
 
@@ -165,6 +172,7 @@ def main(
                         print "before: "
                         print "w[i]", w[i]
                         print "h[j]", h[j]
+                        print "Ni[i]", Ni[i], "Nj[j]", Nj[j]
                         print "esti", esti
                         print "delta_w", delta_w
                         print "delta_h", delta_h
