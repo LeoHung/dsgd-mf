@@ -1,5 +1,5 @@
 num_factors=20
-num_workers=1
+num_workers=10
 num_iterations=10
 beta_value=0.5
 lambda_value=0.0
