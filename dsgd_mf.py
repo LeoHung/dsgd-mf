@@ -113,11 +113,14 @@ def main(
 
                 n = epoch * total_v + (total_v * d_i) / d  # estimate 'n'
 
+                block_i = None
+
                 _vs = None
                 _ws = None
                 _hs = None
 
                 for it in iterator:
+                    block_i = it[0]
                     _vs = it[1][0]
                     _ws = it[1][1]
                     _hs = it[1][2]
@@ -136,7 +139,7 @@ def main(
                 for _v in _vs:
                     i, j, r = _v[1], _v[2], _v[3]
 
-                    block_i = gen_block_i(i, N, d)
+                    # block_i = gen_block_i(i, N, d)
                     block_j = gen_block_j(j, M, d, d_i)
                     if block_i != block_j:
                         continue
@@ -175,6 +178,7 @@ def main(
                 return ret
 
             new_w_h = v.groupWith(w.keyBy(w_key), h.keyBy(h_key)).mapPartitions(sgd_partitions)
+            new_w_h.cache()
 
             w = new_w_h.filter(lambda x: x[0] == 'w')
             h = new_w_h.filter(lambda x: x[0] == 'h')
