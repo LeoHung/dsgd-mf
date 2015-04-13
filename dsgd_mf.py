@@ -56,7 +56,7 @@ def gen_block_j(j, M, d, d_i):
 def main(
         num_factors, num_workers, num_iterations, beta_value, lambda_value,
         input_v_filepath, output_w_filepath, output_h_filepath):
-    sc = SparkContext("local", "DSGD")
+    sc = SparkContext("local[10]", "DSGD")
 
     d = num_workers
     # load v
@@ -87,10 +87,46 @@ def main(
     def gen_h(t):
         j, Nj = t[0], t[1]
         return ('w', j, np.array([0.01 * gauss(0, 1) for _ in range(num_factors)]), Nj)
-    h = v.map(lambda x: (x[1], 1)).reduceByKey(lambda x, y: x + y).map(gen_h)
+    h = v.map(lambda x: (x[2], 1)).reduceByKey(lambda x, y: x + y).map(gen_h)
+
+    # vi_min = v.map(lambda x: x[1]).distinct().reduce(lambda x, y: min(x,y))
+    # vi_max = v.map(lambda x: x[1]).distinct().reduce(lambda x, y: max(x,y))
+    # vj_min = v.map(lambda x: x[2]).distinct().reduce(lambda x, y: min(x,y))
+    # vj_max = v.map(lambda x: x[2]).distinct().reduce(lambda x, y: max(x,y))
+    # vi_avg = v.map(lambda x: x[1]).distinct().mean()
+    # vj_avg = v.map(lambda x: x[2]).distinct().mean()
+
+    # wi_min = w.map(lambda x: x[1]).reduce(lambda x, y: min(x,y))
+    # wi_max = w.map(lambda x: x[1]).reduce(lambda x, y: max(x,y))
+    # wi_avg = w.map(lambda x: x[1]).mean()
+
+    # hj_min = h.map(lambda x: x[1]).reduce(lambda x, y: min(x,y))
+    # hj_max = h.map(lambda x: x[1]).reduce(lambda x, y: max(x,y))
+    # hj_avg = h.map(lambda x: x[1]).mean()
+
+    # print " ------------------ "
+    # print " ------------------ "
+    # print " ------------------ "
+    # print " ------------------ "
+    # print " ------------------ "
+
+
+    # print "vi range:", vi_min, "~", vi_max, "   avg :", vi_avg
+    # print "vj range:", vj_min, "~", vj_max, "   avg :", vj_avg
+
+    # print "wi range:", wi_min, "~", wi_max, "   avg :", wi_avg
+    # print "hj range:", hj_min, "~", hj_max, "   avg :", hj_avg
+
+    # print " ------------------ "
+    # print " ------------------ "
+    # print " ------------------ "
+    # print " ------------------ "
+    # print " ------------------ "
+
+
 
     # partition v
-    v = v.keyBy(v_key)
+    v = v.keyBy(v_key).partitionBy(d)
     v.cache()
 
     # main mf loop
@@ -136,9 +172,18 @@ def main(
                     h_dict[_h[1]] = _h[2]
                     Nj[_h[1]] = _h[3]
 
+
+                # print "w_is:", w_dict.keys()
+                # print "h_js:", h_dict.keys()
+                # print "len(vs):", len(_vs)
+                # if len(w_dict) == 0:
+                #     print "erorr: block_i=", block_i
+
+
                 for _v in _vs:
                     i, j, r = _v[1], _v[2], _v[3]
 
+                    # print "v: i, j" , i, j
                     # block_i = gen_block_i(i, N, d)
                     block_j = gen_block_j(j, M, d, d_i)
                     if block_i != block_j:
@@ -177,7 +222,12 @@ def main(
 
                 return ret
 
-            new_w_h = v.groupWith(w.keyBy(w_key), h.keyBy(h_key)).mapPartitions(sgd_partitions)
+
+
+            new_w_h = v.groupWith(
+                        w.keyBy(w_key).partitionBy(d),
+                        h.keyBy(h_key).partitionBy(d)
+                    ).mapPartitions(sgd_partitions)
             new_w_h.cache()
 
             w = new_w_h.filter(lambda x: x[0] == 'w')
