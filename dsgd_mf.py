@@ -17,31 +17,41 @@ IS_TEST = True
 test_output_path = "/tmp/netflix/"
 
 
-def dump_WH(path, all_data, N, M, num_factors, epoch):
-    dump_W("%sW_%d.csv" % (path, epoch), all_data, N, num_factors)
-    dump_H("%sH_%d.csv" % (path, epoch), all_data, M, num_factors)
+def dump_WH(path, w, h, N, M, num_factors, epoch):
+    dump_W("%sW_%d.csv" % (path, epoch), w, N, num_factors)
+    dump_H("%sH_%d.csv" % (path, epoch), h, M, num_factors)
 
 
-def dump_W(filename, all_data, N, num_factors):
-    w_vectors = all_data.filter(lambda x: x[0] == 'w').collect()
-    w_vectors = [(i ,vector) for _, i, vector in sorted(w_vectors, key=lambda x: x[1])]
-    
-    w = np.zeros(N, num_factors)
+def dump_W(filename, w, N, num_factors):
+    w_vectors = w.collect()
+    w_vectors = [(i, vector) for _, i, vector, Ni in w_vectors]
+
+    w = np.zeros((N, num_factors))
     for i, w_vector in w_vectors:
-        w[i] = w_vector 
-    
+        w[i] = w_vector
+
     np.savetxt(filename, w, delimiter=",")
 
 
-def dump_H(filename, all_data, M, num_factors):
-    h_vectors = all_data.filter(lambda x: x[0] == 'h').collect()
-    h_vectors = [(j, vector) for _, j, vector in sorted(h_vectors, key=lambda x: x[1])]
-    
-    h = np.zeros(M, num_factors)
+def dump_H(filename, h, M, num_factors):
+    h_vectors = h.collect()
+    h_vectors = [(j, vector) for _, j, vector, Nj in h_vectors]
+
+    h = np.zeros((M, num_factors))
     for j, h_vector in h_vectors:
-        h[j] = h_vector 
+        h[j] = h_vector
+
     np.savetxt(filename, h.T, delimiter=",")
 
+
+def gen_block_i(i, N, d):
+    return i / int(math.ceil(float(N) / float(d)))
+
+
+def gen_block_j(j, M, d, d_i):
+    block_j = j / int(math.ceil(float(M) / float(d)))
+    block_j = (block_j + d_i) % d
+    return block_j
 
 def main(
         num_factors, num_workers, num_iterations, beta_value, lambda_value,
@@ -56,158 +66,124 @@ def main(
         tmp = line.split(",")
         return ('v', int(tmp[0]) - 1, int(tmp[1]) - 1, int(tmp[2]))
     v = v.map(lambda line: split_data(line))
-    v.cache()
 
     total_v = v.count()
 
     # get m, n
     N, M = get_n(v), get_m(v)
 
-    # get Ni, Nj
-    Ni = v.map(lambda x: (x[1], 1)).reduceByKey(lambda x, y: x + y).map(lambda x: ('Ni', x[0], x[1]))
-    Nj = v.map(lambda x: (x[2], 1)).reduceByKey(lambda x, y: x + y).map(lambda x: ('Nj', x[0], x[1]))
+    # split V
+    def v_key(t):
+        i = t[1]
+        return gen_block_i(i, N, d)
 
-    # all i 
-    all_i = v.map(lambda x: x[1]).distinct()
-    all_j = v.map(lambda x: x[2]).distinct()
+    # generate w with Ni
+    def gen_w(t):
+        i, Ni = t[0], t[1]
+        return ('w', i, np.array([0.01 * gauss(0, 1) for _ in range(num_factors)]), Ni)
+    w = v.map(lambda x: (x[1], 1)).reduceByKey(lambda x, y: x + y).map(gen_w)
 
-    # generate w
-    #w = sc.parallelize(
-    #    [('w', i, np.array([random() for _ in range(num_factors)]))
-    #        for i in range(N)]
-    #)
-    w = all_i.map(lambda i: ('w', i, np.array([0.01 * gauss(0, 1) for _ in range(num_factors)]))) 
+    # generate h with Hj
+    def gen_h(t):
+        j, Nj = t[0], t[1]
+        return ('w', j, np.array([0.01 * gauss(0, 1) for _ in range(num_factors)]), Nj)
+    h = v.map(lambda x: (x[1], 1)).reduceByKey(lambda x, y: x + y).map(gen_h)
 
-    # generate h
-    #h = sc.parallelize(
-    #    [('h', j, np.array([random() for _ in range(num_factors)]))
-    #        for j in range(M)]
-    #)
-    h = all_j.map(lambda j: ('h', j, np.array([0.01 * gauss(0, 1) for _ in range(num_factors)])))
-
-    all_data = w.union(h).union(v).union(Ni).union(Nj)
+    # partition v
+    v = v.keyBy(v_key)
+    v.cache()
 
     # main mf loop
     for epoch in xrange(num_iterations):
 
         # generate stratum
         for d_i in xrange(d):
-            def v_map(t):
-                i, j = t[1], t[2]
-                block_i = i / int(math.ceil(float(N) / float(d)))
-                block_i = (block_i + d_i) % d
-                block_j = j / int(math.ceil(float(M) / float(d)))
+            def w_key(t):
+                return v_key(t)
 
-                if block_i == block_j:
-                    return block_i, t
-                else:
-                    return d, t
-
-            def w_map(t):
-                i = t[1]
-                block_i = i / int(math.ceil(float(N) / float(d)))
-                block_i = (block_i + d_i) % d
-                return block_i, t
-
-            def h_map(t):
+            def h_key(t):
                 j = t[1]
-                block_j = j / int(math.ceil(float(M) / float(d)))
-                return block_j, t
-
-            def Ni_map(t):
-                return w_map(t)
-
-            def Nj_map(t):
-                return h_map(t)
-
-            def stratum_map(t):
-                if t[0] == 'w':
-                    return w_map(t)
-                elif t[0] == 'h':
-                    return h_map(t)
-                elif t[0] == 'v':
-                    return v_map(t)
-                elif t[0] == 'Ni':
-                    return Ni_map(t)
-                elif t[0] == 'Nj':
-                    return Nj_map(t)
+                return gen_block_j(j, M, d, d_i)
 
             def sgd_partitions(iterator):
-                w = {}
-                h = {}
+                w_dict = {}
+                h_dict = {}
                 Ni = {}
                 Nj = {}
-                tmp_v = []
-
-                for it in iterator:
-                    t = it[1]
-                    if t[0] == 'w':
-                        i = t[1]
-                        w[i] = t[2]
-                    elif t[0] == 'h':
-                        j = t[1]
-                        h[j] = t[2]
-                    elif t[0] == 'v':
-                        tmp_v.append(t)
-                    elif t[0] == 'Ni':
-                        Ni[t[1]] = t[2]
-                    elif t[0] == 'Nj':
-                        Nj[t[1]] = t[2]
 
                 n = epoch * total_v + (total_v * d_i) / d  # estimate 'n'
 
-                if len(w) > 0 and len(h) > 0:
-                    for t in tmp_v:
-                        i, j, r = t[1], t[2], t[3]
+                _vs = None
+                _ws = None
+                _hs = None
 
-                        epsilon = math.pow((100 + n), - beta_value)
-                        n += 1
+                for it in iterator:
+                    _vs = it[1][0]
+                    _ws = it[1][1]
+                    _hs = it[1][2]
 
-                        esti = float(r) - np.inner(w[i], h[j])
+                if _vs is None:
+                    return []
 
-                        delta_w = -2.0 * esti * h[j] + 2.0 * ((lambda_value) / Ni[i]) * w[i]
-                        delta_h = -2.0 * esti * w[i] + 2.0 * ((lambda_value) / Nj[j]) * h[j]
+                for _w in _ws:
+                    w_dict[_w[1]] = _w[2]
+                    Ni[_w[1]] = _w[3]
 
-                        print "i, j, r", i, j, r
-                        print "before: "
-                        print "w[i]", w[i]
-                        print "h[j]", h[j]
-                        print "Ni[i]", Ni[i], "Nj[j]", Nj[j]
-                        print "esti", esti
-                        print "delta_w", delta_w
-                        print "delta_h", delta_h
-                        print "epsilon", epsilon
+                for _h in _hs:
+                    h_dict[_h[1]] = _h[2]
+                    Nj[_h[1]] = _h[3]
 
-                        w[i] = w[i] - epsilon * delta_w
-                        h[j] = h[j] - epsilon * delta_h
+                for _v in _vs:
+                    i, j, r = _v[1], _v[2], _v[3]
 
-                        print "after: "
-                        print "w[i]", w[i]
-                        print "h[j]", h[j]
+                    block_i = gen_block_i(i, N, d)
+                    block_j = gen_block_j(j, M, d, d_i)
+                    if block_i != block_j:
+                        continue
 
+                    epsilon = math.pow((100 + n), - beta_value)
+                    n += 1
+
+                    esti = float(r) - np.inner(w_dict[i], h_dict[j])
+
+                    delta_w = -2.0 * esti * h_dict[j] + 2.0 * ((lambda_value) / Ni[i]) * w_dict[i]
+                    delta_h = -2.0 * esti * w_dict[i] + 2.0 * ((lambda_value) / Nj[j]) * h_dict[j]
+
+                    # print "i, j, r", i, j, r
+                    # print "before: "
+                    # print "w[i]", w_dict[i]
+                    # print "h[j]", h_dict[j]
+                    # print "Ni[i]", Ni[i], "Nj[j]", Nj[j]
+                    # print "esti", esti
+                    # print "delta_w", delta_w
+                    # print "delta_h", delta_h
+                    # print "epsilon", epsilon
+
+                    w_dict[i] = w_dict[i] - epsilon * delta_w
+                    h_dict[j] = h_dict[j] - epsilon * delta_h
+
+                    # print "after: "
+                    # print "w[i]", w_dict[i]
+                    # print "h[j]", h_dict[j]
 
                 ret = []
-                for i, vector in w.items():
-                    ret.append(('w', i, vector))
-                for j, vector in h.items():
-                    ret.append(('h', j, vector))
-                for i, value in Ni.items():
-                    ret.append(('Ni', i, value))
-                for j, value in Nj.items():
-                    ret.append(('Nj', j, value))
-                for v in tmp_v:
-                    ret.append(v)
+                for i, vector in w_dict.items():
+                    ret.append(('w', i, vector, Ni[i]))
+                for j, vector in h_dict.items():
+                    ret.append(('h', j, vector, Nj[j]))
 
                 return ret
 
-            all_data = all_data.map(stratum_map).partitionBy(d + 1).mapPartitions(sgd_partitions)
+            new_w_h = v.groupWith(w.keyBy(w_key), h.keyBy(h_key)).mapPartitions(sgd_partitions)
+
+            w = new_w_h.filter(lambda x: x[0] == 'w')
+            h = new_w_h.filter(lambda x: x[0] == 'h')
 
         if IS_TEST:
-            dump_WH(test_output_path, all_data, N, M, num_factors, epoch)
+            dump_WH(test_output_path, w, h, N, M, num_factors, epoch)
 
-
-    dump_W(output_w_filepath, all_data, N, num_factors)
-    dump_H(output_h_filepath, all_data, M, num_factors)
+    dump_W(output_w_filepath, w, N, num_factors)
+    dump_H(output_h_filepath, h, M, num_factors)
 
 
 if __name__ == "__main__":

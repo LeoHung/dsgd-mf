@@ -1,11 +1,15 @@
-num_factors=5
+num_factors=20
 num_workers=1
 num_iterations=10
-beta_value=0.8
-lambda_value=1.0
-input_v_filepath=data/test_v.txt
-output_w_filepath=data/test_out_w.txt
-output_h_filepath=data/test_out_h.txt
+beta_value=0.5
+lambda_value=0.0
+# input_v_filepath=data/test_v.txt
+output_w_filepath=data/autolab_w.txt
+output_h_filepath=data/autolab_h.txt
+
+input_v_filepath=data/autolab_train.csv
+#output_w_filepath=data/test_out_w.txt
+#output_h_filepath=data/test_out_h.txt
 
 default: run
 
@@ -19,3 +23,6 @@ eval:
 
 test:
 	spark-submit test-partitions.py
+
+lnzsl:
+	python LNZSL.py $(input_v_filepath)

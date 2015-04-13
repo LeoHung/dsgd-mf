@@ -20,4 +20,4 @@ def main(path, v_file):
     
 if __name__ == "__main__":
     from sys import argv
-    main('/tmp/sanchuah.',argv[1])
+    main('/tmp/netflix/',argv[1])
