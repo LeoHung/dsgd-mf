@@ -172,6 +172,9 @@ def main(
     # main mf loop
     for epoch in xrange(num_iterations):
 
+        print " --------- EPOCH %d --------- " % epoch
+        print " -------------------------- " 
+
         # generate stratum
         for d_i in xrange(d):
             def w_key(t):
