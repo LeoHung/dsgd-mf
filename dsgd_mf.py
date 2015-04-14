@@ -19,9 +19,22 @@ IS_TEST = True
 test_output_path = "/tmp/netflix/"
 
 
+
 def dump_WH(path, w, h, N, M, num_factors, epoch):
     dump_W("%sW_%d.csv" % (path, epoch), w, N, num_factors)
     dump_H("%sH_%d.csv" % (path, epoch), h, M, num_factors)
+
+
+def new_dump_W(filename, w, N, num_factors):
+    start_time = datetime.now()
+
+    w_matrix = np.zeros((N, num_factors))
+    for i, w_vector in w.items():
+        w_matrix[i] = w_vector
+
+    np.savetxt(filename, w_matrix, fmt='%.4f', delimiter=",")
+
+    print "dump_W : %f secs" % (datetime.now() - start_time).total_seconds()
 
 
 def dump_W(filename, w, N, num_factors):
@@ -36,6 +49,18 @@ def dump_W(filename, w, N, num_factors):
     np.savetxt(filename, w_matrix, fmt='%.4f', delimiter=",")
 
     print "dump_W : %f secs" % (datetime.now() - start_time).total_seconds()
+
+
+def new_dump_H(filename, h, M, num_factors):
+    start_time = datetime.now()
+
+    h_matrix = np.zeros((M, num_factors))
+    for j, h_vector in h.items():
+        h_matrix[j] = h_vector
+
+    np.savetxt(filename, h_matrix.T, fmt='%.4f', delimiter=",")
+
+    print "dump_H : %f secs" % (datetime.now() - start_time).total_seconds()
 
 
 def dump_H(filename, h, M, num_factors):
@@ -63,8 +88,8 @@ def gen_block_j(j, M, d, d_i):
 
 
 def new_new_sum_lnzsl(v, w, h, num_workers, N):
-    w_dict = w.map(lambda x: (x[1], x[2])).collectAsMap()
-    h_dict = h.map(lambda x: (x[1], x[2])).collectAsMap()
+    w_dict = w
+    h_dict = h
 
     def cal_lnzsl(t):
         i, j, r = t[1][1], t[1][2], t[1][3]
@@ -93,7 +118,6 @@ def new_sum_lnzsl(v, w, h, num_workers, N):
 
         for v in vs:
             i, j, r = v[1], v[2], v[3]
-            print v
             partial_lnzsl += (r - np.inner(w_dict[i], h_dict[j])) ** 2
 
         return partial_lnzsl
@@ -181,16 +205,12 @@ def main(
         return gen_block_i(i, N, d)
 
     # generate w with Ni
-    def gen_w(t):
-        i, Ni = t[0], t[1]
-        return ('w', i, np.array([0.01 * gauss(0, 1) for _ in range(num_factors)]), Ni)
-    w = v.map(lambda x: (x[1], 1)).reduceByKey(lambda x, y: x + y).map(gen_w)
+    Ni = v.map(lambda x: (x[1], 1)).reduceByKey(lambda x, y: x + y).collectAsMap()
+    w = dict([(i, np.array([0.01 * gauss(0, 1) for _ in range(num_factors)])) for i in Ni.keys()])
 
     # generate h with Hj
-    def gen_h(t):
-        j, Nj = t[0], t[1]
-        return ('h', j, np.array([0.01 * gauss(0, 1) for _ in range(num_factors)]), Nj)
-    h = v.map(lambda x: (x[2], 1)).reduceByKey(lambda x, y: x + y).map(gen_h)
+    Nj = v.map(lambda x: (x[2], 1)).reduceByKey(lambda x, y: x + y).collectAsMap()
+    h = dict([(j, np.array([0.01 * gauss(0, 1) for _ in range(num_factors)])) for j in Nj.keys()])
 
     # partition v
     v = v.keyBy(v_key).partitionBy(d)
@@ -201,86 +221,64 @@ def main(
 
     # main mf loop
     for epoch in xrange(num_iterations):
-
         print " --------- EPOCH %d --------- " % epoch
         start_time = datetime.now()
 
         # generate stratum
         for d_i in xrange(d):
-            def w_key(t):
-                return v_key(t)
-
-            def h_key(t):
-                j = t[1]
-                return gen_block_j(j, M, d, d_i)
-
             def sgd_partitions(iterator):
-                w_dict = {}
-                h_dict = {}
-                Ni = {}
-                Nj = {}
-
                 n = epoch * total_v + (total_v * d_i) / d  # estimate 'n'
                 _beta_value = beta_value
                 _lambda_value = lambda_value
 
-                _vs = None
-                _ws = None
-                _hs = None
+                new_w = dict()
+                new_h = dict()
 
                 ret = []
 
-                for it in iterator:
-                    block_i = it[0]
-                    _vs = it[1][0]
-                    _ws = it[1][1]
-                    _hs = it[1][2]
+                for v_point in iterator:
+                    i, j, r = v_point[1][1], v_point[1][2], v_point[1][3]
 
-                    if _vs is None:
-                        return []
+                    block_i = v_point[0]
+                    block_j = gen_block_j(j, M, d, d_i)
+                    if block_i != block_j:
+                        continue
 
-                    for _w in _ws:
-                        w_dict[_w[1]] = _w[2]
-                        Ni[_w[1]] = _w[3]
+                    if i not in new_w:
+                        new_w[i] = w[i]
+                    if j not in new_h:
+                        new_h[j] = h[j]
 
-                    for _h in _hs:
-                        h_dict[_h[1]] = _h[2]
-                        Nj[_h[1]] = _h[3]
+                    epsilon = math.pow((100 + n), - _beta_value)
+                    n += 1
 
-                    for _v in _vs:
-                        i, j, r = _v[1], _v[2], _v[3]
+                    esti = float(r) - np.inner(new_w[i], new_h[j])
 
-                        block_j = gen_block_j(j, M, d, d_i)
-                        if block_i != block_j:
-                            continue
+                    delta_w = -2.0 * esti * new_h[j] + 2.0 * ((_lambda_value) / Ni[i]) * new_w[i]
+                    delta_h = -2.0 * esti * new_w[i] + 2.0 * ((_lambda_value) / Nj[j]) * new_h[j]
 
-                        epsilon = math.pow((100 + n), - _beta_value)
-                        n += 1
+                    new_w[i] = new_w[i] - epsilon * delta_w
+                    new_h[j] = new_h[j] - epsilon * delta_h
 
-                        esti = float(r) - np.inner(w_dict[i], h_dict[j])
-
-                        delta_w = -2.0 * esti * h_dict[j] + 2.0 * ((_lambda_value) / Ni[i]) * w_dict[i]
-                        delta_h = -2.0 * esti * w_dict[i] + 2.0 * ((_lambda_value) / Nj[j]) * h_dict[j]
-
-                        w_dict[i] = w_dict[i] - epsilon * delta_w
-                        h_dict[j] = h_dict[j] - epsilon * delta_h
-
-                    for i, vector in w_dict.items():
-                        ret.append(('w', i, vector, Ni[i]))
-                    for j, vector in h_dict.items():
-                        ret.append(('h', j, vector, Nj[j]))
+                for i, vector in new_w.items():
+                    ret.append(("w", i, vector))
+                for j, vector in new_h.items():
+                    ret.append(("h", j, vector))
 
                 return ret
 
-            new_w_h = v.groupWith(w.keyBy(w_key).partitionBy(d), h.keyBy(h_key).partitionBy(d)).mapPartitions(sgd_partitions)
+            new_w_h = v.mapPartitions(sgd_partitions)
             # new_w_h = v.cogroup(w.keyBy(w_key).partitionBy(d), h.keyBy(h_key).partitionBy(d), d).mapPartitions(sgd_partitions)
-
             new_w_h.cache()
 
-            w = new_w_h.filter(lambda x: x[0] == 'w')
-            w.cache()
-            h = new_w_h.filter(lambda x: x[0] == 'h')
-            h.cache()
+            new_w = new_w_h.filter(lambda x: x[0] == 'w').map(lambda x: (x[1], x[2])).collectAsMap()
+            new_h = new_w_h.filter(lambda x: x[0] == 'h').map(lambda x: (x[1], x[2])).collectAsMap()
+
+            for i, w_vector in new_w.items():
+                w[i] = w_vector
+
+            for j, h_vector in new_h.items():
+                h[j] = h_vector
 
         if IS_TEST:
             test_start_time = datetime.now()
@@ -294,8 +292,8 @@ def main(
         duration = datetime.now() - start_time
         print "Epoch %d [%f]" % (epoch, duration.total_seconds())
 
-    dump_W(output_w_filepath, w, N, num_factors)
-    dump_H(output_h_filepath, h, M, num_factors)
+    new_dump_W(output_w_filepath, w, N, num_factors)
+    new_dump_H(output_h_filepath, h, M, num_factors)
 
     if IS_TEST:
         print "i, total_lnzsl"
