@@ -3,7 +3,7 @@ from pyspark import SparkContext
 import numpy as np
 from random import random, gauss
 import math
-
+import os
 
 def get_n(data):
     return data.map(lambda x: (0, x[1])).reduce(lambda x, y: max(x, y))[1] + 1
@@ -53,10 +53,51 @@ def gen_block_j(j, M, d, d_i):
     block_j = (block_j + d_i) % d
     return block_j
 
+
+def sum_lnzsl(v, w, h, num_workers, N):
+    delta_N = math.ceil(float(N) / float(num_workers))
+
+    def cal_lnzsl(t):
+        vs, ws, hs = t[1][0], t[1][1], t[1][2]
+        w_dict = {}
+        h_dict = {}
+
+        partial_lnzsl = 0.0
+
+        for w in ws:
+            w_dict[w[1]] = w[2]
+
+        for h in hs:
+            h_dict[h[1]] = h[2]
+
+        for v in vs:
+            i, j, r = v[1][1], v[1][2], v[1][3]
+            partial_lnzsl += (r - np.inner(w_dict[i], h_dict[j])) ** 2
+
+        return partial_lnzsl
+
+    total_lnzsl = 0.0
+
+    total_lnzsl += v.keyBy(lambda x: 1).groupWith(w.keyBy(lambda x: 1), h.keyBy(lambda x:1)).map(cal_lnzsl).reduce(lambda x, y : x + y)
+
+    # for i in xrange(num_workers):
+    #     sub_v = v.filter(lambda x: delta_N * i <= x[1] and x[1] < delta_N * (i + 1)).keyBy(lambda x: (x[2] / delta_N))
+    #     sub_w = w.filter(lambda x: delta_N * i <= x[1] and x[1] < delta_N * (i + 1)).flatMap(lambda x: [(i, x) for i in xrange(num_workers)])
+    #     sub_h = h.keyBy(lambda x: (x[1] / delta_N))
+
+    #     total_lnzsl += sub_v.groupWith(sub_w, sub_h).map(cal_lnzsl).reduce(lambda x, y: x + y)
+
+    return total_lnzsl
+
+
 def main(
         num_factors, num_workers, num_iterations, beta_value, lambda_value,
         input_v_filepath, output_w_filepath, output_h_filepath):
-    sc = SparkContext("local[10]", "DSGD")
+
+    if "Master" in os.environ:
+        sc = SparkContext(os.environ['Master'], "DSGD")
+    else:
+        sc = SparkContext("local[%d]" % (num_workers), "DSGD")
 
     d = num_workers
     # load v
@@ -110,7 +151,6 @@ def main(
     # print " ------------------ "
     # print " ------------------ "
 
-
     # print "vi range:", vi_min, "~", vi_max, "   avg :", vi_avg
     # print "vj range:", vj_min, "~", vj_max, "   avg :", vj_avg
 
@@ -123,11 +163,11 @@ def main(
     # print " ------------------ "
     # print " ------------------ "
 
-
-
     # partition v
     v = v.keyBy(v_key).partitionBy(d)
     v.cache()
+
+    all_lnzsl = []
 
     # main mf loop
     for epoch in xrange(num_iterations):
@@ -172,14 +212,6 @@ def main(
                     h_dict[_h[1]] = _h[2]
                     Nj[_h[1]] = _h[3]
 
-
-                # print "w_is:", w_dict.keys()
-                # print "h_js:", h_dict.keys()
-                # print "len(vs):", len(_vs)
-                # if len(w_dict) == 0:
-                #     print "erorr: block_i=", block_i
-
-
                 for _v in _vs:
                     i, j, r = _v[1], _v[2], _v[3]
 
@@ -222,23 +254,24 @@ def main(
 
                 return ret
 
-
-
-            new_w_h = v.groupWith(
-                        w.keyBy(w_key).partitionBy(d),
-                        h.keyBy(h_key).partitionBy(d)
-                    ).mapPartitions(sgd_partitions)
+            new_w_h = v.groupWith(w.keyBy(w_key).partitionBy(d), h.keyBy(h_key).partitionBy(d)).mapPartitions(sgd_partitions)
             new_w_h.cache()
 
             w = new_w_h.filter(lambda x: x[0] == 'w')
             h = new_w_h.filter(lambda x: x[0] == 'h')
 
         if IS_TEST:
-            dump_WH(test_output_path, w, h, N, M, num_factors, epoch)
+            total_lnzsl = sum_lnzsl(v, w, h, num_workers, N)
+            all_lnzsl.append(total_lnzsl)
+            # dump_WH(test_output_path, w, h, N, M, num_factors, epoch)
 
     dump_W(output_w_filepath, w, N, num_factors)
     dump_H(output_h_filepath, h, M, num_factors)
 
+    if IS_TEST:
+        print "i, total_lnzsl"
+        for i, total_lnzsl in enumerate(all_lnzsl):
+            print "%d,%f" % (i, total_lnzsl)
 
 if __name__ == "__main__":
     num_factors = int(argv[1])
