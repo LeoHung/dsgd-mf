@@ -173,7 +173,7 @@ def main(
     for epoch in xrange(num_iterations):
 
         print " --------- EPOCH %d --------- " % epoch
-        print " -------------------------- " 
+        print " -------------------------- "
 
         # generate stratum
         for d_i in xrange(d):
@@ -198,62 +198,64 @@ def main(
                 _ws = None
                 _hs = None
 
+                ret = []
+
+
                 for it in iterator:
                     block_i = it[0]
                     _vs = it[1][0]
                     _ws = it[1][1]
                     _hs = it[1][2]
 
-                if _vs is None:
-                    return []
+                    if _vs is None:
+                        return []
 
-                for _w in _ws:
-                    w_dict[_w[1]] = _w[2]
-                    Ni[_w[1]] = _w[3]
+                    for _w in _ws:
+                        w_dict[_w[1]] = _w[2]
+                        Ni[_w[1]] = _w[3]
 
-                for _h in _hs:
-                    h_dict[_h[1]] = _h[2]
-                    Nj[_h[1]] = _h[3]
+                    for _h in _hs:
+                        h_dict[_h[1]] = _h[2]
+                        Nj[_h[1]] = _h[3]
 
-                for _v in _vs:
-                    i, j, r = _v[1], _v[2], _v[3]
+                    for _v in _vs:
+                        i, j, r = _v[1], _v[2], _v[3]
 
-                    # print "v: i, j" , i, j
-                    # block_i = gen_block_i(i, N, d)
-                    block_j = gen_block_j(j, M, d, d_i)
-                    if block_i != block_j:
-                        continue
+                        # print "v: i, j" , i, j
+                        # block_i = gen_block_i(i, N, d)
+                        block_j = gen_block_j(j, M, d, d_i)
+                        if block_i != block_j:
+                            continue
 
-                    epsilon = math.pow((100 + n), - beta_value)
-                    n += 1
+                        epsilon = math.pow((100 + n), - beta_value)
+                        n += 1
 
-                    esti = float(r) - np.inner(w_dict[i], h_dict[j])
+                        esti = float(r) - np.inner(w_dict[i], h_dict[j])
 
-                    delta_w = -2.0 * esti * h_dict[j] + 2.0 * ((lambda_value) / Ni[i]) * w_dict[i]
-                    delta_h = -2.0 * esti * w_dict[i] + 2.0 * ((lambda_value) / Nj[j]) * h_dict[j]
+                        delta_w = -2.0 * esti * h_dict[j] + 2.0 * ((lambda_value) / Ni[i]) * w_dict[i]
+                        delta_h = -2.0 * esti * w_dict[i] + 2.0 * ((lambda_value) / Nj[j]) * h_dict[j]
 
-                    # print "i, j, r", i, j, r
-                    # print "before: "
-                    # print "w[i]", w_dict[i]
-                    # print "h[j]", h_dict[j]
-                    # print "Ni[i]", Ni[i], "Nj[j]", Nj[j]
-                    # print "esti", esti
-                    # print "delta_w", delta_w
-                    # print "delta_h", delta_h
-                    # print "epsilon", epsilon
+                        # print "i, j, r", i, j, r
+                        # print "before: "
+                        # print "w[i]", w_dict[i]
+                        # print "h[j]", h_dict[j]
+                        # print "Ni[i]", Ni[i], "Nj[j]", Nj[j]
+                        # print "esti", esti
+                        # print "delta_w", delta_w
+                        # print "delta_h", delta_h
+                        # print "epsilon", epsilon
 
-                    w_dict[i] = w_dict[i] - epsilon * delta_w
-                    h_dict[j] = h_dict[j] - epsilon * delta_h
+                        w_dict[i] = w_dict[i] - epsilon * delta_w
+                        h_dict[j] = h_dict[j] - epsilon * delta_h
 
-                    # print "after: "
-                    # print "w[i]", w_dict[i]
-                    # print "h[j]", h_dict[j]
+                        # print "after: "
+                        # print "w[i]", w_dict[i]
+                        # print "h[j]", h_dict[j]
 
-                ret = []
-                for i, vector in w_dict.items():
-                    ret.append(('w', i, vector, Ni[i]))
-                for j, vector in h_dict.items():
-                    ret.append(('h', j, vector, Nj[j]))
+                    for i, vector in w_dict.items():
+                        ret.append(('w', i, vector, Ni[i]))
+                    for j, vector in h_dict.items():
+                        ret.append(('h', j, vector, Nj[j]))
 
                 return ret
 
