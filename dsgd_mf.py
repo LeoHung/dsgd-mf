@@ -4,6 +4,8 @@ import numpy as np
 from random import random, gauss
 import math
 import os
+from datetime import datetime
+
 
 def get_n(data):
     return data.map(lambda x: (0, x[1])).reduce(lambda x, y: max(x, y))[1] + 1
@@ -23,25 +25,31 @@ def dump_WH(path, w, h, N, M, num_factors, epoch):
 
 
 def dump_W(filename, w, N, num_factors):
-    w_vectors = w.collect()
-    w_vectors = [(i, vector) for _, i, vector, Ni in w_vectors]
+    start_time = datetime.now()
 
-    w = np.zeros((N, num_factors))
+    w_vectors = w.map(lambda x: (x[1], x[2])).collect()
+
+    w_matrix = np.zeros((N, num_factors))
     for i, w_vector in w_vectors:
-        w[i] = w_vector
+        w_matrix[i] = w_vector
 
-    np.savetxt(filename, w, delimiter=",")
+    np.savetxt(filename, w_matrix, fmt='%.4f', delimiter=",")
+
+    print "dump_W : %f secs" % (datetime.now() - start_time).total_seconds()
 
 
 def dump_H(filename, h, M, num_factors):
-    h_vectors = h.collect()
-    h_vectors = [(j, vector) for _, j, vector, Nj in h_vectors]
+    start_time = datetime.now()
 
-    h = np.zeros((M, num_factors))
+    h_vectors = h.map(lambda x: (x[1], x[2])).collect()
+
+    h_matrix = np.zeros((M, num_factors))
     for j, h_vector in h_vectors:
-        h[j] = h_vector
+        h_matrix[j] = h_vector
 
-    np.savetxt(filename, h.T, delimiter=",")
+    np.savetxt(filename, h_matrix.T, fmt='%.4f', delimiter=",")
+
+    print "dump_H : %f secs" % (datetime.now() - start_time).total_seconds()
 
 
 def gen_block_i(i, N, d):
@@ -52,6 +60,51 @@ def gen_block_j(j, M, d, d_i):
     block_j = j / int(math.ceil(float(M) / float(d)))
     block_j = (block_j + d_i) % d
     return block_j
+
+
+def new_new_sum_lnzsl(v, w, h, num_workers, N):
+    w_dict = w.map(lambda x: (x[1], x[2])).collectAsMap()
+    h_dict = h.map(lambda x: (x[1], x[2])).collectAsMap()
+
+    def cal_lnzsl(t):
+        i, j, r = t[1][1], t[1][2], t[1][3]
+        lnzsl = (r - np.inner(w_dict[i], h_dict[j])) ** 2
+        return lnzsl
+
+    return v.map(cal_lnzsl).reduce(lambda x, y: x + y)
+
+def new_sum_lnzsl(v, w, h, num_workers, N):
+    def w_key(t):
+        i = t[1]
+        return gen_block_i(i, N, num_workers)
+
+    def cal_lnzsl(t):
+        vs, ws, hs = t[1][0], t[1][1], t[1][2]
+        w_dict = {}
+        h_dict = {}
+
+        partial_lnzsl = 0.0
+
+        for w in ws:
+            w_dict[w[1]] = w[2]
+
+        for h in hs:
+            h_dict[h[1]] = h[2]
+
+        for v in vs:
+            i, j, r = v[1], v[2], v[3]
+            print v
+            partial_lnzsl += (r - np.inner(w_dict[i], h_dict[j])) ** 2
+
+        return partial_lnzsl
+
+
+    total_lnzsl = v.groupWith(
+                        w.keyBy(w_key),
+                        h.flatMap(lambda t: [(partition_i, t) for partition_i in range(num_workers)])
+                    ).map(cal_lnzsl).reduce(lambda x, y: x + y)
+
+    return total_lnzsl
 
 
 def sum_lnzsl(v, w, h, num_workers, N):
@@ -78,6 +131,8 @@ def sum_lnzsl(v, w, h, num_workers, N):
 
     total_lnzsl = 0.0
 
+    # total_lnzsl += v.keyBy(lambda x: x[1] % 10).groupWith(w.keyBy(lambda x: x[1] % 10), h.flatMap(lambda x: [ (_, x) for _ in range(10)])).map(cal_lnzsl).reduce(lambda x, y: x+ y)
+
     total_lnzsl += v.keyBy(lambda x: 1).groupWith(w.keyBy(lambda x: 1), h.keyBy(lambda x:1)).map(cal_lnzsl).reduce(lambda x, y : x + y)
 
     # for i in xrange(num_workers):
@@ -90,6 +145,11 @@ def sum_lnzsl(v, w, h, num_workers, N):
     return total_lnzsl
 
 
+def rmse(total_lnzsl, total_v):
+    from math import sqrt
+    return sqrt(total_lnzsl / total_v)
+
+
 def main(
         num_factors, num_workers, num_iterations, beta_value, lambda_value,
         input_v_filepath, output_w_filepath, output_h_filepath):
@@ -97,7 +157,8 @@ def main(
     if "Master" in os.environ:
         sc = SparkContext(os.environ['Master'], "DSGD")
     else:
-        sc = SparkContext("local[%d]" % (num_workers), "DSGD")
+        sc = SparkContext("local[4]", "DSGD")
+        # sc = SparkContext("local[%d]" % (num_workers), "DSGD")
 
     d = num_workers
     # load v
@@ -107,6 +168,7 @@ def main(
         tmp = line.split(",")
         return ('v', int(tmp[0]) - 1, int(tmp[1]) - 1, int(tmp[2]))
     v = v.map(lambda line: split_data(line))
+    v.cache()
 
     total_v = v.count()
 
@@ -127,53 +189,21 @@ def main(
     # generate h with Hj
     def gen_h(t):
         j, Nj = t[0], t[1]
-        return ('w', j, np.array([0.01 * gauss(0, 1) for _ in range(num_factors)]), Nj)
+        return ('h', j, np.array([0.01 * gauss(0, 1) for _ in range(num_factors)]), Nj)
     h = v.map(lambda x: (x[2], 1)).reduceByKey(lambda x, y: x + y).map(gen_h)
-
-    # vi_min = v.map(lambda x: x[1]).distinct().reduce(lambda x, y: min(x,y))
-    # vi_max = v.map(lambda x: x[1]).distinct().reduce(lambda x, y: max(x,y))
-    # vj_min = v.map(lambda x: x[2]).distinct().reduce(lambda x, y: min(x,y))
-    # vj_max = v.map(lambda x: x[2]).distinct().reduce(lambda x, y: max(x,y))
-    # vi_avg = v.map(lambda x: x[1]).distinct().mean()
-    # vj_avg = v.map(lambda x: x[2]).distinct().mean()
-
-    # wi_min = w.map(lambda x: x[1]).reduce(lambda x, y: min(x,y))
-    # wi_max = w.map(lambda x: x[1]).reduce(lambda x, y: max(x,y))
-    # wi_avg = w.map(lambda x: x[1]).mean()
-
-    # hj_min = h.map(lambda x: x[1]).reduce(lambda x, y: min(x,y))
-    # hj_max = h.map(lambda x: x[1]).reduce(lambda x, y: max(x,y))
-    # hj_avg = h.map(lambda x: x[1]).mean()
-
-    # print " ------------------ "
-    # print " ------------------ "
-    # print " ------------------ "
-    # print " ------------------ "
-    # print " ------------------ "
-
-    # print "vi range:", vi_min, "~", vi_max, "   avg :", vi_avg
-    # print "vj range:", vj_min, "~", vj_max, "   avg :", vj_avg
-
-    # print "wi range:", wi_min, "~", wi_max, "   avg :", wi_avg
-    # print "hj range:", hj_min, "~", hj_max, "   avg :", hj_avg
-
-    # print " ------------------ "
-    # print " ------------------ "
-    # print " ------------------ "
-    # print " ------------------ "
-    # print " ------------------ "
 
     # partition v
     v = v.keyBy(v_key).partitionBy(d)
     v.cache()
 
     all_lnzsl = []
+    all_rmse = []
 
     # main mf loop
     for epoch in xrange(num_iterations):
 
         print " --------- EPOCH %d --------- " % epoch
-        print " -------------------------- "
+        start_time = datetime.now()
 
         # generate stratum
         for d_i in xrange(d):
@@ -191,15 +221,14 @@ def main(
                 Nj = {}
 
                 n = epoch * total_v + (total_v * d_i) / d  # estimate 'n'
-
-                block_i = None
+                _beta_value = beta_value
+                _lambda_value = lambda_value
 
                 _vs = None
                 _ws = None
                 _hs = None
 
                 ret = []
-
 
                 for it in iterator:
                     block_i = it[0]
@@ -221,36 +250,20 @@ def main(
                     for _v in _vs:
                         i, j, r = _v[1], _v[2], _v[3]
 
-                        # print "v: i, j" , i, j
-                        # block_i = gen_block_i(i, N, d)
                         block_j = gen_block_j(j, M, d, d_i)
                         if block_i != block_j:
                             continue
 
-                        epsilon = math.pow((100 + n), - beta_value)
+                        epsilon = math.pow((100 + n), - _beta_value)
                         n += 1
 
                         esti = float(r) - np.inner(w_dict[i], h_dict[j])
 
-                        delta_w = -2.0 * esti * h_dict[j] + 2.0 * ((lambda_value) / Ni[i]) * w_dict[i]
-                        delta_h = -2.0 * esti * w_dict[i] + 2.0 * ((lambda_value) / Nj[j]) * h_dict[j]
-
-                        # print "i, j, r", i, j, r
-                        # print "before: "
-                        # print "w[i]", w_dict[i]
-                        # print "h[j]", h_dict[j]
-                        # print "Ni[i]", Ni[i], "Nj[j]", Nj[j]
-                        # print "esti", esti
-                        # print "delta_w", delta_w
-                        # print "delta_h", delta_h
-                        # print "epsilon", epsilon
+                        delta_w = -2.0 * esti * h_dict[j] + 2.0 * ((_lambda_value) / Ni[i]) * w_dict[i]
+                        delta_h = -2.0 * esti * w_dict[i] + 2.0 * ((_lambda_value) / Nj[j]) * h_dict[j]
 
                         w_dict[i] = w_dict[i] - epsilon * delta_w
                         h_dict[j] = h_dict[j] - epsilon * delta_h
-
-                        # print "after: "
-                        # print "w[i]", w_dict[i]
-                        # print "h[j]", h_dict[j]
 
                     for i, vector in w_dict.items():
                         ret.append(('w', i, vector, Ni[i]))
@@ -260,15 +273,26 @@ def main(
                 return ret
 
             new_w_h = v.groupWith(w.keyBy(w_key).partitionBy(d), h.keyBy(h_key).partitionBy(d)).mapPartitions(sgd_partitions)
+            # new_w_h = v.cogroup(w.keyBy(w_key).partitionBy(d), h.keyBy(h_key).partitionBy(d), d).mapPartitions(sgd_partitions)
+
             new_w_h.cache()
 
             w = new_w_h.filter(lambda x: x[0] == 'w')
+            w.cache()
             h = new_w_h.filter(lambda x: x[0] == 'h')
+            h.cache()
 
         if IS_TEST:
-            total_lnzsl = sum_lnzsl(v, w, h, num_workers, N)
+            test_start_time = datetime.now()
+            total_lnzsl = new_new_sum_lnzsl(v, w, h, num_workers, N)
             all_lnzsl.append(total_lnzsl)
-            # dump_WH(test_output_path, w, h, N, M, num_factors, epoch)
+            all_rmse.append(rmse(total_lnzsl, total_v))
+
+            test_duration = datetime.now() - test_start_time
+            print "Epoch %d [%f] - (lnzse: %f), (rmse: %f)" % (epoch, test_duration.total_seconds(), all_lnzsl[-1], all_rmse[-1])
+
+        duration = datetime.now() - start_time
+        print "Epoch %d [%f]" % (epoch, duration.total_seconds())
 
     dump_W(output_w_filepath, w, N, num_factors)
     dump_H(output_h_filepath, h, M, num_factors)
@@ -277,6 +301,12 @@ def main(
         print "i, total_lnzsl"
         for i, total_lnzsl in enumerate(all_lnzsl):
             print "%d,%f" % (i, total_lnzsl)
+
+        print "--------------"
+        print "i, rmse"
+        for i, rmse_value in enumerate(all_rmse):
+            print "%d,%f" % (i, rmse_value)
+
 
 if __name__ == "__main__":
     num_factors = int(argv[1])
