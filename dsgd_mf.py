@@ -1,30 +1,42 @@
 from sys import argv
 from pyspark import SparkContext
 import numpy as np
-from random import random, gauss
+from random import gauss
 import math
 import os
 from datetime import datetime
 
-
+# Test mode will calculate Lnzsl and rmse for each iteration.
+# It also calculate the running time for profiling
 IS_TEST = False
 
 
 def get_n(data):
+    """
+        get the largest index of i axis
+        @data: RDD of data (format: (marker, i, j))
+    """
     return data.map(lambda x: (0, x[1])).reduce(lambda x, y: max(x, y))[1] + 1
 
 
 def get_m(data):
+    """
+        get the largest index of j axis
+        @data: RDD of data (format: (marker, i, j))
+    """
     return data.map(lambda x: (0, x[2])).reduce(lambda x, y: max(x, y))[1] + 1
 
 
-def dump_WH(path, w, h, N, M, num_factors, epoch):
-    dump_W("%sW_%d.csv" % (path, epoch), w, N, num_factors)
-    dump_H("%sH_%d.csv" % (path, epoch), h, M, num_factors)
-
-
-def new_dump_W(filename, w, N, num_factors):
-    start_time = datetime.now()
+def dump_W(filename, w, N, num_factors):
+    """
+        dump the W matrix into file, in dense format
+        @filename: output filename
+        @w: w dictionary
+        @N: the largest index in i axis
+        @num_factors: number of factors
+    """
+    if IS_TEST:
+        start_time = datetime.now()
 
     w_matrix = np.zeros((N, num_factors))
     for i, w_vector in w.items():
@@ -32,25 +44,20 @@ def new_dump_W(filename, w, N, num_factors):
 
     np.savetxt(filename, w_matrix, fmt='%.4f', delimiter=",")
 
-    print "dump_W : %f secs" % (datetime.now() - start_time).total_seconds()
+    if IS_TEST:
+        print "dump_W : %f secs" % (datetime.now() - start_time).total_seconds()
 
 
-def dump_W(filename, w, N, num_factors):
-    start_time = datetime.now()
-
-    w_vectors = w.map(lambda x: (x[1], x[2])).collect()
-
-    w_matrix = np.zeros((N, num_factors))
-    for i, w_vector in w_vectors:
-        w_matrix[i] = w_vector
-
-    np.savetxt(filename, w_matrix, fmt='%.4f', delimiter=",")
-
-    print "dump_W : %f secs" % (datetime.now() - start_time).total_seconds()
-
-
-def new_dump_H(filename, h, M, num_factors):
-    start_time = datetime.now()
+def dump_H(filename, h, M, num_factors):
+    """
+        dump the H matrix into file, in dense format
+        @filename: output filename
+        @h: h dictionary
+        @M: the largest index in j axis
+        @num_factors: number of factors
+    """
+    if IS_TEST:
+        start_time = datetime.now()
 
     h_matrix = np.zeros((M, num_factors))
     for j, h_vector in h.items():
@@ -58,108 +65,67 @@ def new_dump_H(filename, h, M, num_factors):
 
     np.savetxt(filename, h_matrix.T, fmt='%.4f', delimiter=",")
 
-    print "dump_H : %f secs" % (datetime.now() - start_time).total_seconds()
-
-
-def dump_H(filename, h, M, num_factors):
-    start_time = datetime.now()
-
-    h_vectors = h.map(lambda x: (x[1], x[2])).collect()
-
-    h_matrix = np.zeros((M, num_factors))
-    for j, h_vector in h_vectors:
-        h_matrix[j] = h_vector
-
-    np.savetxt(filename, h_matrix.T, fmt='%.4f', delimiter=",")
-
-    print "dump_H : %f secs" % (datetime.now() - start_time).total_seconds()
+    if IS_TEST:
+        print "dump_H : %f secs" % (datetime.now() - start_time).total_seconds()
 
 
 def gen_block_i(i, N, d):
+    """
+        generate block_i for an entry (i, j)
+        @i: i of the entry
+        @N: the largest index in i axis
+        @d: the number of workers
+    """
     return i / int(math.ceil(float(N) / float(d)))
 
 
 def gen_block_j(j, M, d, d_i):
+    """
+        generate block_j for an entry (i, j)
+        @j: j of the entry
+        @M: the largest index in j axis
+        @d: the number of workers
+        @d_i: current index of sub-iteration
+    """
     block_j = j / int(math.ceil(float(M) / float(d)))
     block_j = (block_j + d_i) % d
     return block_j
 
 
-def new_new_sum_lnzsl(v, w, h, num_workers, N):
-    w_dict = w
-    h_dict = h
-
+def cal_lnzsl(v, w, h, num_workers, N):
+    """
+        calculate the sum of Lnzsl
+        @v: RDD of v
+        @w: w dictionary
+        @h: h dictionary
+        @num_workers: number of workers
+        @N: the largest index in i axis
+    """
     def cal_lnzsl(t):
         i, j, r = t[1][1], t[1][2], t[1][3]
-        lnzsl = (r - np.inner(w_dict[i], h_dict[j])) ** 2
+        lnzsl = (r - np.inner(w[i], h[j])) ** 2
         return lnzsl
 
     return v.map(cal_lnzsl).reduce(lambda x, y: x + y)
 
-def new_sum_lnzsl(v, w, h, num_workers, N):
-    def w_key(t):
-        i = t[1]
-        return gen_block_i(i, N, num_workers)
-
-    def cal_lnzsl(t):
-        vs, ws, hs = t[1][0], t[1][1], t[1][2]
-        w_dict = {}
-        h_dict = {}
-
-        partial_lnzsl = 0.0
-
-        for w in ws:
-            w_dict[w[1]] = w[2]
-
-        for h in hs:
-            h_dict[h[1]] = h[2]
-
-        for v in vs:
-            i, j, r = v[1], v[2], v[3]
-            partial_lnzsl += (r - np.inner(w_dict[i], h_dict[j])) ** 2
-
-        return partial_lnzsl
-
-
-    total_lnzsl = v.groupWith(
-                        w.keyBy(w_key),
-                        h.flatMap(lambda t: [(partition_i, t) for partition_i in range(num_workers)])
-                    ).map(cal_lnzsl).reduce(lambda x, y: x + y)
-
-    return total_lnzsl
-
-
-def sum_lnzsl(v, w, h, num_workers, N):
-    delta_N = math.ceil(float(N) / float(num_workers))
-
-    def cal_lnzsl(t):
-        vs, ws, hs = t[1][0], t[1][1], t[1][2]
-        w_dict = {}
-        h_dict = {}
-
-        partial_lnzsl = 0.0
-
-        for w in ws:
-            w_dict[w[1]] = w[2]
-
-        for h in hs:
-            h_dict[h[1]] = h[2]
-
-        for v in vs:
-            i, j, r = v[1][1], v[1][2], v[1][3]
-            partial_lnzsl += (r - np.inner(w_dict[i], h_dict[j])) ** 2
-
-        return partial_lnzsl
-
-    total_lnzsl = 0.0
-    total_lnzsl += v.keyBy(lambda x: 1).groupWith(w.keyBy(lambda x: 1), h.keyBy(lambda x:1)).map(cal_lnzsl).reduce(lambda x, y : x + y)
-
-    return total_lnzsl
-
 
 def rmse(total_lnzsl, total_v):
-    from math import sqrt
-    return sqrt(total_lnzsl / total_v)
+    """
+        calculate rmse
+        @total_lnzsl: sum of Lnzsl
+        @total_v: the number of entries
+    """
+    return math.sqrt(total_lnzsl / total_v)
+
+
+def load_v(sc, input_v_filepath):
+    v = sc.textFile(input_v_filepath)
+
+    def split_data(line):
+        tmp = line.split(",")
+        return ('v', int(tmp[0]) - 1, int(tmp[1]) - 1, int(tmp[2]))
+    v = v.map(lambda line: split_data(line))
+    return v
 
 
 def main(
@@ -170,27 +136,17 @@ def main(
         sc = SparkContext(os.environ['Master'], "DSGD")
     else:
         sc = SparkContext("local[4]", "DSGD")
-        # sc = SparkContext("local[%d]" % (num_workers), "DSGD")
 
     d = num_workers
-    # load v
-    v = sc.textFile(input_v_filepath)
 
-    def split_data(line):
-        tmp = line.split(",")
-        return ('v', int(tmp[0]) - 1, int(tmp[1]) - 1, int(tmp[2]))
-    v = v.map(lambda line: split_data(line))
+    # load v
+    v = load_v(sc, input_v_filepath)
     v.cache()
 
     total_v = v.count()
 
     # get m, n
     N, M = get_n(v), get_m(v)
-
-    # split V
-    def v_key(t):
-        i = t[1]
-        return gen_block_i(i, N, d)
 
     # generate w with Ni
     Ni = v.map(lambda x: (x[1], 1)).reduceByKey(lambda x, y: x + y).collectAsMap()
@@ -201,11 +157,16 @@ def main(
     h = dict([(j, np.array([0.01 * gauss(0, 1) for _ in range(num_factors)])) for j in Nj.keys()])
 
     # partition v
+    def v_key(t):
+        i = t[1]
+        return gen_block_i(i, N, d)
+
     v = v.keyBy(v_key).partitionBy(d)
     v.cache()
 
-    all_lnzsl = []
-    all_rmse = []
+    if IS_TEST:
+        all_lnzsl = []
+        all_rmse = []
 
     # main mf loop
     for epoch in xrange(num_iterations):
@@ -213,28 +174,32 @@ def main(
             print " --------- EPOCH %d --------- " % epoch
             start_time = datetime.now()
 
-        # generate stratum
         for d_i in xrange(d):
             def sgd_partitions(iterator):
                 n = epoch * total_v + (total_v * d_i) / d  # estimate 'n'
-                _beta_value = beta_value
-                _lambda_value = lambda_value
+                _beta_value = beta_value  # fetch beta_value
+                _lambda_value = lambda_value  # fetch lambda_value
 
-                new_w = dict()
-                new_h = dict()
+                new_w = dict()  # the cached w
+                new_h = dict()  # the cached h
 
-                ret = []
+                ret = []  # the return list
 
                 for v_point in iterator:
                     i, j, r = v_point[1][1], v_point[1][2], v_point[1][3]
 
+                    # generate block_i, block_j for each entry
+                    # only the entries whose block_i == block_j will be
+                    # processed (in stratum)
                     block_i = v_point[0]
                     block_j = gen_block_j(j, M, d, d_i)
                     if block_i != block_j:
                         continue
 
+                    # if w[i] is not in cached w, fetch it
                     if i not in new_w:
                         new_w[i] = w[i]
+                    # if h[i] is not in cached h, fetch it
                     if j not in new_h:
                         new_h[j] = h[j]
 
@@ -249,6 +214,7 @@ def main(
                     new_w[i] = new_w[i] - epsilon * delta_w
                     new_h[j] = new_h[j] - epsilon * delta_h
 
+                # add updated w into return list
                 for i, vector in new_w.items():
                     ret.append(("w", i, vector))
                 for j, vector in new_h.items():
@@ -262,15 +228,18 @@ def main(
             new_w = new_w_h.filter(lambda x: x[0] == 'w').map(lambda x: (x[1], x[2])).collectAsMap()
             new_h = new_w_h.filter(lambda x: x[0] == 'h').map(lambda x: (x[1], x[2])).collectAsMap()
 
+            # update w
             for i, w_vector in new_w.items():
                 w[i] = w_vector
 
+            # update h
             for j, h_vector in new_h.items():
                 h[j] = h_vector
 
         if IS_TEST:
+            # if in test mode: calculate Lnzsl and rmse
             test_start_time = datetime.now()
-            total_lnzsl = new_new_sum_lnzsl(v, w, h, num_workers, N)
+            total_lnzsl = cal_lnzsl(v, w, h, num_workers, N)
             all_lnzsl.append(total_lnzsl)
             all_rmse.append(rmse(total_lnzsl, total_v))
 
@@ -280,8 +249,9 @@ def main(
             duration = datetime.now() - start_time
             print "Epoch %d [%f]" % (epoch, duration.total_seconds())
 
-    new_dump_W(output_w_filepath, w, N, num_factors)
-    new_dump_H(output_h_filepath, h, M, num_factors)
+    # output W and H matrix
+    dump_W(output_w_filepath, w, N, num_factors)
+    dump_H(output_h_filepath, h, M, num_factors)
 
     if IS_TEST:
         print "i, total_lnzsl"
