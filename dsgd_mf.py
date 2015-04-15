@@ -7,17 +7,15 @@ import os
 from datetime import datetime
 
 
+IS_TEST = False
+
+
 def get_n(data):
     return data.map(lambda x: (0, x[1])).reduce(lambda x, y: max(x, y))[1] + 1
 
 
 def get_m(data):
     return data.map(lambda x: (0, x[2])).reduce(lambda x, y: max(x, y))[1] + 1
-
-
-IS_TEST = True
-test_output_path = "/tmp/netflix/"
-
 
 
 def dump_WH(path, w, h, N, M, num_factors, epoch):
@@ -154,17 +152,7 @@ def sum_lnzsl(v, w, h, num_workers, N):
         return partial_lnzsl
 
     total_lnzsl = 0.0
-
-    # total_lnzsl += v.keyBy(lambda x: x[1] % 10).groupWith(w.keyBy(lambda x: x[1] % 10), h.flatMap(lambda x: [ (_, x) for _ in range(10)])).map(cal_lnzsl).reduce(lambda x, y: x+ y)
-
     total_lnzsl += v.keyBy(lambda x: 1).groupWith(w.keyBy(lambda x: 1), h.keyBy(lambda x:1)).map(cal_lnzsl).reduce(lambda x, y : x + y)
-
-    # for i in xrange(num_workers):
-    #     sub_v = v.filter(lambda x: delta_N * i <= x[1] and x[1] < delta_N * (i + 1)).keyBy(lambda x: (x[2] / delta_N))
-    #     sub_w = w.filter(lambda x: delta_N * i <= x[1] and x[1] < delta_N * (i + 1)).flatMap(lambda x: [(i, x) for i in xrange(num_workers)])
-    #     sub_h = h.keyBy(lambda x: (x[1] / delta_N))
-
-    #     total_lnzsl += sub_v.groupWith(sub_w, sub_h).map(cal_lnzsl).reduce(lambda x, y: x + y)
 
     return total_lnzsl
 
@@ -221,8 +209,9 @@ def main(
 
     # main mf loop
     for epoch in xrange(num_iterations):
-        print " --------- EPOCH %d --------- " % epoch
-        start_time = datetime.now()
+        if IS_TEST:
+            print " --------- EPOCH %d --------- " % epoch
+            start_time = datetime.now()
 
         # generate stratum
         for d_i in xrange(d):
@@ -268,7 +257,6 @@ def main(
                 return ret
 
             new_w_h = v.mapPartitions(sgd_partitions)
-            # new_w_h = v.cogroup(w.keyBy(w_key).partitionBy(d), h.keyBy(h_key).partitionBy(d), d).mapPartitions(sgd_partitions)
             new_w_h.cache()
 
             new_w = new_w_h.filter(lambda x: x[0] == 'w').map(lambda x: (x[1], x[2])).collectAsMap()
@@ -289,8 +277,8 @@ def main(
             test_duration = datetime.now() - test_start_time
             print "Epoch %d [%f] - (lnzse: %f), (rmse: %f)" % (epoch, test_duration.total_seconds(), all_lnzsl[-1], all_rmse[-1])
 
-        duration = datetime.now() - start_time
-        print "Epoch %d [%f]" % (epoch, duration.total_seconds())
+            duration = datetime.now() - start_time
+            print "Epoch %d [%f]" % (epoch, duration.total_seconds())
 
     new_dump_W(output_w_filepath, w, N, num_factors)
     new_dump_H(output_h_filepath, h, M, num_factors)
