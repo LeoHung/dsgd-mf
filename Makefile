@@ -24,3 +24,15 @@ eval:
 	python eval.pyc /tmp/eval_acc.log spark-submit dsgd_mf.py $(num_factors) $(num_workers) $(num_iterations) $(beta_value) $(lambda_value) $(input_v_filepath) $(output_w_filepath) $(output_h_filepath)
 	python eval_acc.py /tmp/eval_acc.log spark-submit dsgd_mf.py $(num_factors) $(num_workers) $(num_iterations) $(beta_value) $(lambda_value) $(input_v_filepath) $(output_w_filepath) $(output_h_filepath)
 
+output_beta=0.5
+output_iteration=15
+output_lambda=0.0
+
+run-output:
+	python eval.pyc eval_acc.log spark-submit dsgd_mf.py 20 3 $(output_iteration) $(output_beta) $(output_lambda) data/autolab_train.csv w.csv h.csv > spark_dsgd.log 
+
+lnzsl:
+	python LNZSL.py data/autolab_train.csv w.csv h.csv
+
+tar:
+	tar -cvf hw7.tar *.py *.csv *.log sanchuah-report.pdf
